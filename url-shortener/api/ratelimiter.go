@@ -38,7 +38,7 @@ func (l *Limiter) GetLimiter(ip string) *rate.Limiter {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Clean up old clients
+	// Clean up old clients, we dont want to keep them around
 	for ip, rl := range l.clients {
 		if time.Since(rl.lastSeen) > 5*time.Minute {
 			delete(l.clients, ip)
@@ -59,7 +59,7 @@ func (l *Limiter) GetLimiter(ip string) *rate.Limiter {
 	return l.clients[ip].limiter
 }
 
-// LimitMiddleware enforces the rate limiting for each request.
+// LimitMiddleware enforces the rate limiting for each request. Decorator
 func (l *Limiter) LimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Get client IP

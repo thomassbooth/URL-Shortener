@@ -19,7 +19,9 @@ const defaultListenAddr = ":8005"
 // Config holds the configuration for the server.
 type Config struct {
 	ListenAddr string
-	DSN        string // Add Data Source Name for PostgreSQL connection
+	DSN        string
+	Rate       int
+	Burst      int
 }
 
 // Server struct holds the server's configuration, worker pool, handlers, and rate limiter.
@@ -41,7 +43,7 @@ func NewServer(cfg Config, db *storage.Storage) *Server {
 	wp := internal.NewWorkerPool(5, db)
 	handlers := NewHandlers(wp, db)
 	// Initialize rate limiter with a limit of 10 requests per second and a burst of 20
-	limiter := NewLimiter(rate.Limit(10), 20)
+	limiter := NewLimiter(rate.Limit(cfg.Rate), cfg.Burst)
 	srv := &http.Server{
 		Addr: cfg.ListenAddr,
 	}
@@ -60,6 +62,7 @@ func (s *Server) Start() error {
 	// Wrap routes with rate limiting middleware
 	http.Handle("/shorten", s.limiter.LimitMiddleware(http.HandlerFunc(s.handlers.HandleShortenURL)))
 	http.Handle("/", s.limiter.LimitMiddleware(http.HandlerFunc(s.handlers.HandleRedirect)))
+
 	s.srv.Handler = http.DefaultServeMux
 	// Start the server in a separate goroutine with recovery handling
 	go func() {

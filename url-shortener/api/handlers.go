@@ -19,40 +19,47 @@ func NewHandlers(wp *internal.WorkerPool, db *storage.Storage) *Handlers {
 	return &Handlers{wp: wp, db: db}
 }
 
+// handleJob processes a job by adding it to the worker pool and waiting for the result or timeout.
+func (h *Handlers) handleJob(job utils.Job, timeout time.Duration) (string, error) {
+	resultChannel := make(chan string)
+	job.Result = resultChannel
+	h.wp.AddJob(job)
+
+	select {
+	case result := <-resultChannel:
+		if result == "" {
+			return "", http.ErrNoLocation
+		}
+		return result, nil
+	case <-time.After(timeout):
+		return "", http.ErrHandlerTimeout
+	}
+}
+
 // HandleShortenURL handles the POST request to shorten a URL.
 func (h *Handlers) HandleShortenURL(w http.ResponseWriter, r *http.Request) {
-	// Validate the request method using the utility function
+	// Validate the request method
 	if err := utils.ValidateRequest(w, r, http.MethodPost); err != nil {
 		return
 	}
 
+	// Decode the JSON request payload
 	var req struct {
 		LongURL string `json:"long_url"`
 	}
-
-	// Decode the JSON request payload
 	if err := utils.DecodeJSON(r.Body, &req); err != nil || req.LongURL == "" {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
-	// Prepare result channel and add the job to the worker pool
-	resultChannel := make(chan string)
-	job := utils.Job{Type: utils.ShortenJob, LongURL: req.LongURL, Result: resultChannel}
-	h.wp.AddJob(job)
 
-	// Wait for result or timeout
-	select {
-	case shortURL := <-resultChannel:
-		if len(shortURL) == 0 {
-			// No result found, respond with a 404
-			utils.RespondWithJSON(w, http.StatusNotFound, map[string]string{"message": "No logs found"})
-		} else {
-			// Successful shortening, return short URL
-			utils.RespondWithJSON(w, http.StatusOK, map[string]string{"short_url": shortURL})
-		}
-	case <-time.After(10 * time.Second):
-		// Timeout error handling
+	// Process the job
+	shortURL, err := h.handleJob(utils.Job{Type: utils.ShortenJob, LongURL: req.LongURL}, 10*time.Second)
+	if err == http.ErrNoLocation {
+		utils.RespondWithJSON(w, http.StatusNotFound, map[string]string{"message": "No logs found"})
+	} else if err == http.ErrHandlerTimeout {
 		utils.RespondWithJSON(w, http.StatusInternalServerError, map[string]string{"message": "Timeout while fetching logs"})
+	} else {
+		utils.RespondWithJSON(w, http.StatusOK, map[string]string{"short_url": shortURL})
 	}
 }
 
@@ -60,29 +67,18 @@ func (h *Handlers) HandleShortenURL(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleRedirect(w http.ResponseWriter, r *http.Request) {
 	// Extract the short URL from the path
 	shortURL := r.URL.Path[1:]
-
 	if shortURL == "" {
 		http.Error(w, "URL not found", http.StatusNotFound)
 		return
 	}
 
-	resultChannel := make(chan string)
-	job := utils.Job{Type: utils.FetchJob, ShortURL: shortURL, Result: resultChannel}
-	h.wp.AddJob(job)
-
-	// Wait for result or timeout
-	select {
-	case longURL := <-resultChannel:
-		if len(longURL) == 0 {
-			// No result found, respond with a 404
-			utils.RespondWithJSON(w, http.StatusNotFound, map[string]string{"message": "No logs found"})
-		} else {
-			// Redirect on success
-			http.Redirect(w, r, longURL, http.StatusFound)
-		}
-	case <-time.After(10 * time.Second):
-		// Timeout error handling
+	// Process the job
+	longURL, err := h.handleJob(utils.Job{Type: utils.FetchJob, ShortURL: shortURL}, 10*time.Second)
+	if err == http.ErrNoLocation {
+		utils.RespondWithJSON(w, http.StatusNotFound, map[string]string{"message": "No logs found"})
+	} else if err == http.ErrHandlerTimeout {
 		utils.RespondWithJSON(w, http.StatusInternalServerError, map[string]string{"message": "Timeout while fetching logs"})
+	} else {
+		http.Redirect(w, r, longURL, http.StatusFound)
 	}
-
 }

@@ -64,16 +64,6 @@ docker-compose up -d
 
 ## Examples
 
-1. Build the docker containers
-```bash
-docker-compose build
-```
-
-2. Start the container
-```bash
-docker-compose up -d
-```
-
 example post shorten request:
 ```bash
 curl -X POST http://localhost:8005/shorten \ 

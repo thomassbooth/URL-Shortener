@@ -1,72 +1,76 @@
 package storage
 
 import (
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 
 	"gorm.io/gorm"
 )
 
 // ShortenURL stores the long URL in the database and generates a unique short URL.
 func (s *Storage) ShortenURL(longURL string) (string, error) {
-	var shortURL string
-	var err error
+	// Check if the long URL already exists in the database
+	shortURL, err := s.findExistingShortURL(longURL)
+	if err != nil {
+		return "", err
+	}
+	if shortURL != "" {
+		return shortURL, nil // Return existing short URL
+	}
 
-	// Retry logic
+	// Retry logic to generate a unique short URL
 	for retries := 0; retries < 5; retries++ {
-		// Generate a short URL hash
-		shortURL = generateShortURL(longURL)
-
-		var existingURL URL
-		if err := s.db.Where("long_url = ?", longURL).First(&existingURL).Error; err == nil {
-			// If it exists, return the existing short URL
-			return existingURL.ShortURL, nil
-		}
-		// Insert the URL entry into the database in a transaction
-		err = s.shortUrlTransaction(shortURL, longURL)
-		// Check if the transaction was successful
+		shortURL, err = s.generateUniqueShortURL(longURL)
 		if err == nil {
 			return shortURL, nil
-		}
-
-		// If the error is "short URL already exists", regenerate and try again
-		if err.Error() != "short URL already exists" {
-			return "", err
 		}
 	}
 
 	return "", fmt.Errorf("failed to generate a unique short URL after multiple attempts")
 }
 
-// GetOriginalURL retrieves the long URL from the database given a short URL.
-func (s *Storage) GetOriginalURL(shortURL string) (string, error) {
-	var url URL
-
-	// Retrieve the long URL by its short URL
-	if err := s.db.First(&url, "short_url = ?", shortURL).Error; err != nil {
-		return "", fmt.Errorf("failed to find original URL: %v", err)
+// findExistingShortURL checks if a long URL already exists and returns the corresponding short URL if found.
+func (s *Storage) findExistingShortURL(longURL string) (string, error) {
+	var existingURL URL
+	if err := s.db.Where("long_url = ?", longURL).First(&existingURL).Error; err == nil {
+		return existingURL.ShortURL, nil
 	}
-
-	return url.LongURL, nil
+	return "", nil // Not found
 }
 
-// generateShortURL creates a short URL hash using SHA-1 and returns the first 6 characters.
-func generateShortURL(longURL string) string {
+// generateUniqueShortURL attempts to generate a unique short URL for a given long URL.
+func (s *Storage) generateUniqueShortURL(longURL string) (string, error) {
+	nonce, _ := rand.Int(rand.Reader, big.NewInt(1<<32))
+	shortURL := generateShortURL(longURL, nonce)
+	err := s.shortUrlTransaction(shortURL, longURL)
+	return shortURL, err
+}
+
+// generateShortURL creates a short URL hash using SHA-1 and returns the first 8 characters.
+func generateShortURL(longURL string, nonce *big.Int) string {
 	hasher := sha1.New()
-	hasher.Write([]byte(longURL))
+	// Concatenate longURL with a nonce to ensure uniqueness
+	hasher.Write([]byte(fmt.Sprintf("%s%d", longURL, nonce)))
 	hashBytes := hasher.Sum(nil)
 	hashString := hex.EncodeToString(hashBytes)
-	return hashString[:8]
+	return hashString[:8] // Return the first 8 characters of the hash
 }
 
+// shortUrlTransaction inserts the short URL and long URL into the database.
 func (s *Storage) shortUrlTransaction(shortURL, longURL string) error {
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		// Check if the short URL already exists
+	return s.db.Transaction(func(tx *gorm.DB) error {
 		var existingURL URL
 		if err := tx.Where("short_url = ?", shortURL).First(&existingURL).Error; err == nil {
-			// Short URL already exists, return a conflict error
-			return fmt.Errorf("short URL already exists")
+			// Short URL already exists
+			if existingURL.LongURL == longURL {
+				return nil // The longURL matches, so no need to insert
+			}
+			return fmt.Errorf("short URL exists but with a different long URL")
+		} else if err != gorm.ErrRecordNotFound {
+			return fmt.Errorf("failed to query for existing short URL: %v", err)
 		}
 
 		// Insert the new URL entry
@@ -80,6 +84,14 @@ func (s *Storage) shortUrlTransaction(shortURL, longURL string) error {
 
 		return nil // Successful transaction
 	})
+}
 
-	return err
+// GetOriginalURL retrieves the long URL from the database given a short URL.
+func (s *Storage) GetOriginalURL(shortURL string) (string, error) {
+	var url URL
+	if err := s.db.First(&url, "short_url = ?", shortURL).Error; err != nil {
+		return "", fmt.Errorf("failed to find original URL: %v", err)
+	}
+
+	return url.LongURL, nil
 }

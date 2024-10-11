@@ -11,26 +11,18 @@ import (
 
 func main() {
 	const connString = "host=localhost port=5432 user=user password=password dbname=url_shortener_db sslmode=disable"
-
-	// Initialize the storage, for some reason I can only do this in the main file
-	storage, err := storage.NewStorage(connString)
-	if err != nil {
-		log.Fatalf("Error connecting to PostgreSQL: %v", err)
-	}
+	// Initialize storage (error handling is now internal)
+	storage := storage.NewStorage(connString)
 	// Notify the channel when an interrupt or terminate signal is received
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	// Create the serverl
+	// Create the server
 	server := api.NewServer(api.Config{}, storage)
-	go func() {
-		if err := server.Start(); err != nil {
-			// this closes our application on Fatal error
-			log.Fatalf("Server failed to start: %v", err)
-		}
-	}()
-	// Block the main thread, waiting for a signal to close our application
+	server.Start()
+	// Block the main thread, waiting for a signal to close the application
 	sig := <-signals
 	log.Printf("Received signal: %v. Shutting down...", sig)
+	// Gracefully stop the server and storage
 	server.Stop()
 	storage.Close()
 }

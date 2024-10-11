@@ -7,11 +7,10 @@ import (
 )
 
 type Worker struct {
-	id     int
-	jobs   <-chan utils.Job
-	quit   <-chan struct{}
-	active *int32
-	store  *storage.Storage
+	id    int
+	jobs  <-chan utils.Job
+	quit  <-chan struct{}
+	store *storage.Storage
 }
 
 type WorkerPool struct {
@@ -21,7 +20,6 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool(numWorkers int, store *storage.Storage) *WorkerPool {
-
 	jobs := make(chan utils.Job, 100) // Buffer to hold incoming jobs
 	quit := make(chan struct{})       // Channel to signal worker to stop
 	pool := &WorkerPool{
@@ -45,44 +43,35 @@ func NewWorkerPool(numWorkers int, store *storage.Storage) *WorkerPool {
 
 	return pool
 }
+
 func (w *Worker) start() {
-free:
 	for {
 		select {
 		case job := <-w.jobs:
-			// Process the job based on its type
-			switch job.Type {
-			case utils.ShortenJob:
-				// Shorten the long URL
-				shortURL, err := w.store.ShortenURL(job.LongURL)
-				if err != nil {
-					fmt.Println("Error shortening URL:", err)
-					job.Result <- "" // Send empty string on error
-					continue
-				}
-				job.Result <- shortURL // Send the shortened URL back
-
-			case utils.FetchJob:
-				// Fetch the original URL using the short URL
-				originalURL, err := w.store.GetOriginalURL(job.ShortURL)
-				if err != nil {
-					fmt.Println("Error fetching original URL:", err)
-					job.Result <- "" // Send empty string on error
-					continue
-				}
-				job.Result <- originalURL // Send the original URL back
-			}
-
+			w.processJob(job) // Delegates job processing to a separate method
 		case <-w.quit:
 			fmt.Printf("Worker %d stopping\n", w.id)
-			w.Stop()
-			break free // Exit the loop
+			return // Exit the loop
 		}
 	}
 }
 
-// Stop stops the worker by sending a signal to its quit channel.
-func (w *Worker) Stop() {
+func (w *Worker) processJob(job utils.Job) {
+	var result string
+	var err error
+
+	switch job.Type {
+	case utils.ShortenJob:
+		result, err = w.store.ShortenURL(job.LongURL)
+	case utils.FetchJob:
+		result, err = w.store.GetOriginalURL(job.ShortURL)
+	}
+
+	if err != nil {
+		fmt.Println("Error processing job:", err)
+		result = "" // Send empty string on error
+	}
+	job.Result <- result // Send the result back
 }
 
 func (wp *WorkerPool) AddJob(job utils.Job) {
@@ -91,13 +80,10 @@ func (wp *WorkerPool) AddJob(job utils.Job) {
 
 // Stop stops all workers in the pool.
 func (wp *WorkerPool) Stop() {
-	// Signal all workers to stop
 	for range wp.workers {
 		wp.quit <- struct{}{} // Send stop signal to worker
 	}
-
-	// Optionally close the jobs channel to prevent further job submissions
-	close(wp.jobs) // This is optional
+	close(wp.jobs) // Close the jobs channel
 }
 
 // QueuedTasks returns the number of queued tasks.
